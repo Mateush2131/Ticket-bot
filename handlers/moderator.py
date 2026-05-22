@@ -2,6 +2,8 @@
 from datetime import datetime
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import func
 
 from config import MODERATOR_IDS, ADMIN_IDS
@@ -11,6 +13,10 @@ from keyboards import get_moderator_keyboard, get_main_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+# Состояния для назначения админа
+class AdminAssign(StatesGroup):
+    waiting_for_id = State()
 
 def is_moderator(user_id: int) -> bool:
     return user_id in MODERATOR_IDS or user_id in ADMIN_IDS
@@ -196,3 +202,131 @@ async def moderator_stats(message: Message):
         await message.answer(stats_text, parse_mode="Markdown")
     finally:
         session.close()
+
+# ========== НОВЫЙ ХЭНДЛЕР: Назначение админа ==========
+
+@router.message(F.text == "👑 Назначить админа")
+async def assign_admin_start(message: Message, state: FSMContext):
+    if not is_moderator(message.from_user.id):
+        await message.answer("⛔ Нет прав")
+        return
+    
+    await message.answer(
+        "👑 **Назначение администратора**\n\n"
+        "Отправьте **Telegram ID** пользователя, которому хотите дать права администратора.\n\n"
+        "📌 *Где взять ID?*\n"
+        "• В профиле пользователя есть кнопка «Копировать ID»\n"
+        "• Или используйте бота @userinfobot\n\n"
+        "❗️ Отправьте только число (ID):",
+        parse_mode="Markdown"
+    )
+    await state.set_state(AdminAssign.waiting_for_id)
+
+@router.message(AdminAssign.waiting_for_id)
+async def assign_admin_process(message: Message, state: FSMContext, bot: Bot):
+    if not is_moderator(message.from_user.id):
+        await state.clear()
+        return
+    
+    # Проверяем, что введено число
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ **Ошибка!**\n\nВведите корректный Telegram ID (только цифры).\n\nПример: `123456789`", parse_mode="Markdown")
+        return
+    
+    session = db.get_session()
+    try:
+        # Ищем пользователя в БД
+        user = session.query(User).filter(User.telegram_id == target_id).first()
+        
+        if not user:
+            await message.answer(
+                f"❌ **Пользователь с ID `{target_id}` не найден**\n\n"
+                f"Возможные причины:\n"
+                f"• Пользователь еще не запускал бота\n"
+                f"• Неверный ID\n\n"
+                f"Попробуйте снова или отмените команду.",
+                parse_mode="Markdown"
+            )
+            return
+        
+        # Проверяем, не админ ли уже
+        if user.role == UserRole.ADMIN:
+            await message.answer(
+                f"⚠️ **Пользователь `@{user.username}` уже является администратором!**\n\n"
+                f"Действие отменено.",
+                parse_mode="Markdown"
+            )
+            return
+        
+        # Сохраняем старую роль для отчета
+        old_role = user.role.value
+        
+        # Назначаем админа
+        user.role = UserRole.ADMIN
+        session.commit()
+        
+        # Уведомляем всех админов
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"👑 **НАЗНАЧЕН НОВЫЙ АДМИНИСТРАТОР!**\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 **Назначил:** @{message.from_user.username} (модератор)\n"
+                    f"👤 **Новый админ:** @{user.username}\n"
+                    f"🆔 **ID:** `{user.telegram_id}`\n"
+                    f"📋 **Была роль:** {old_role}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
+        
+        # Подтверждение модератору
+        await message.answer(
+            f"✅ **Пользователь назначен администратором!**\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 **Пользователь:** @{user.username}\n"
+            f"🆔 **ID:** `{user.telegram_id}`\n"
+            f"📋 **Старая роль:** {old_role}\n"
+            f"👑 **Новая роль:** Администратор\n"
+            f"━━━━━━━━━━━━━━━━━━━━━",
+            parse_mode="Markdown"
+        )
+        
+        # Сообщаем пользователю о назначении
+        try:
+            await bot.send_message(
+                target_id,
+                "👑 **Поздравляем!**\n\n"
+                "Вам присвоена роль **Администратора**!\n\n"
+                "Теперь вам доступны все админ-функции бота.\n\n"
+                "🔹 Используйте админ-панель для управления ботом.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await message.answer(
+                f"⚠️ **Внимание!**\n\n"
+                f"Пользователь @{user.username} назначен админом, "
+                f"но бот не смог отправить ему уведомление.\n"
+                f"Возможно, пользователь заблокировал бота.",
+                parse_mode="Markdown"
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при назначении админа: {e}")
+        await message.answer(f"❌ **Произошла ошибка:** `{str(e)}`", parse_mode="Markdown")
+    finally:
+        session.close()
+    
+    await state.clear()
+
+@router.message(F.text == "◀️ Назад")
+async def mod_back_to_main(message: Message):
+    if not is_moderator(message.from_user.id):
+        return
+    
+    from handlers.user import show_main_menu
+    await show_main_menu(message)

@@ -76,13 +76,15 @@ def get_admin_keyboard():
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_moderator_keyboard():
-    """Клавиатура модератор-панели"""
+    keyboard = InlineKeyboardMarkup(row_width=2)
     buttons = [
-        [KeyboardButton(text="📋 Модерация заявок")],
-        [KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="🔙 Главное меню")]
+        InlineKeyboardButton(text="📋 Модерация заявок", callback_data="moderate_apps"),
+        InlineKeyboardButton(text="📊 Статистика", callback_data="mod_stats"),
+        InlineKeyboardButton(text="👑 Назначить админа", callback_data="assign_admin"),
+        InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")
     ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    keyboard.add(*buttons)
+    return keyboard
 
 def get_subscription_keyboard():
     """Клавиатура для проверки подписки"""

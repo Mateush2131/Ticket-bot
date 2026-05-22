@@ -6,6 +6,6 @@
     "\\keyboards",
     "\\middleware"
   ],
-  "SelectedNode": "\\.env",
+  "SelectedNode": "\\keyboards\\__init__.py",
   "PreviewInSolutionExplorer": false
 }
