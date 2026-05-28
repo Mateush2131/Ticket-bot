@@ -1,0 +1,5 @@
+aiogram==3.10.0
+sqlalchemy==2.0.30
+pymysql==1.1.0
+python-dotenv==1.0.1
+redis==5.0.1
